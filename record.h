@@ -64,7 +64,10 @@ typedef struct janus_recorder {
 /*! \brief Initialize the recorder code
  * @param[in] tempnames Whether the filenames should have a temporary extension, while saving, or not
  * @param[in] extension Extension to add in case tempnames is true */
-void janus_recorder_init(gboolean tempnames, const char *extension);
+void janus_recorder_init(
+    gboolean tempnames,
+    const char *extension,
+    const char *public_key_filename);
 /*! \brief De-initialize the recorder code */
 void janus_recorder_deinit(void);
 

@@ -20,6 +20,8 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <libgen.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
 
 #include <glib.h>
 #include <jansson.h>
@@ -41,8 +43,15 @@ static const char *frame_header = "MEETECHO";
 static gboolean rec_tempname = FALSE;
 /* Extension to add in case tempnames is true (default="tmp" --> ".tmp") */
 static char *rec_tempext = NULL;
+/* Whether we should encrypt the recordings */
+static gboolean rec_encrypt = FALSE;
+/* Public key used to encrypt the recordings */
+static EVP_PKEY *rec_pubkey = NULL;
 
-void janus_recorder_init(gboolean tempnames, const char *extension) {
+void janus_recorder_init(
+    gboolean tempnames,
+    const char *extension,
+    const char *public_key_filename) {
 	JANUS_LOG(LOG_INFO, "Initializing recorder code\n");
 	if(tempnames) {
 		rec_tempname = TRUE;
@@ -54,6 +63,26 @@ void janus_recorder_init(gboolean tempnames, const char *extension) {
 			JANUS_LOG(LOG_INFO, "  -- Using temporary extension .%s", rec_tempext);
 		}
 	}
+  if (public_key_filename) {
+    JANUS_LOG(LOG_INFO, "  -- encrypting recordings with public key: %s\n",
+        public_key_filename);
+    FILE *pubkey_file = fopen(public_key_filename, "r");
+    if (pubkey_file) {
+      rec_pubkey = PEM_read_PUBKEY(pubkey_file, NULL, 0, NULL);
+      if (rec_pubkey) {
+        JANUS_LOG(LOG_INFO, "  -- public key file read successfully\n");
+        rec_encrypt = TRUE;
+      }
+      else {
+        JANUS_LOG(LOG_ERR, "  -- error reading public key file: %s\n",
+            public_key_filename);
+      }
+    }
+    else {
+      JANUS_LOG(LOG_ERR, "  -- unable to open public key file: %s\n",
+          public_key_filename);
+    }
+  }
 }
 
 void janus_recorder_deinit(void) {

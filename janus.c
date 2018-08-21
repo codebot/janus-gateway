@@ -3413,6 +3413,9 @@ gint main(int argc, char *argv[])
 	if(args_info.cert_pwd_given) {
 		janus_config_add_item(config, "certificates", "cert_pwd", args_info.cert_pwd_arg);
 	}
+  if(args_info.rec_pubkey_given) {
+    janus_config_add_item(config, "general", "recordings_public_key", args_info.rec_pubkey_arg);
+  }
 	if(args_info.stun_server_given) {
 		/* Split in server and port (if port missing, use 3478 as default) */
 		char *stunport = strrchr(args_info.stun_server_arg, ':');
@@ -3612,10 +3615,16 @@ gint main(int argc, char *argv[])
 
 	/* Initialize the recorder code */
 	item = janus_config_get_item_drilldown(config, "general", "recordings_tmp_ext");
+  janus_config_item *recordings_key_item =
+      janus_config_get_item_drilldown(config, "general", "recordings_public_key");
+  const char *recordings_public_key_filename = NULL;
+  if (recordings_key_item && recordings_key_item->value)
+    recordings_public_key_filename = recordings_key_item->value;
+
 	if(item && item->value) {
-		janus_recorder_init(TRUE, item->value);
+		janus_recorder_init(TRUE, item->value, recordings_public_key_filename);
 	} else {
-		janus_recorder_init(FALSE, NULL);
+		janus_recorder_init(FALSE, NULL, recordings_public_key_filename);
 	}
 
 	/* Setup ICE stuff (e.g., checking if the provided STUN server is correct) */
