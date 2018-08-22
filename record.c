@@ -43,10 +43,22 @@ static const char *frame_header = "MEETECHO";
 static gboolean rec_tempname = FALSE;
 /* Extension to add in case tempnames is true (default="tmp" --> ".tmp") */
 static char *rec_tempext = NULL;
-/* Whether we should encrypt the recordings */
-static gboolean rec_encrypt = FALSE;
 /* Public key used to encrypt the recordings */
 static EVP_PKEY *rec_pubkey = NULL;
+
+gboolean janus_recorder_write(
+		janus_recorder *recorder,
+		void *ptr, size_t nbytes) {
+	if (!rec_pubkey) {
+		if (fwrite(ptr, 1, nbytes, recorder->file) == nbytes)
+			return TRUE;
+		else
+			return FALSE;
+	} else {
+		if (1 == EVP_SealUpdate(recorder->evp_ctx,
+	}
+	return TRUE;
+}
 
 void janus_recorder_init(
     gboolean tempnames,
@@ -64,25 +76,24 @@ void janus_recorder_init(
 		}
 	}
   if (public_key_filename) {
-    JANUS_LOG(LOG_INFO, "  -- encrypting recordings with public key: %s\n",
-        public_key_filename);
-    FILE *pubkey_file = fopen(public_key_filename, "r");
-    if (pubkey_file) {
-      rec_pubkey = PEM_read_PUBKEY(pubkey_file, NULL, 0, NULL);
-      if (rec_pubkey) {
-        JANUS_LOG(LOG_INFO, "  -- public key file read successfully\n");
-        rec_encrypt = TRUE;
-      }
-      else {
-        JANUS_LOG(LOG_ERR, "  -- error reading public key file: %s\n",
-            public_key_filename);
-      }
-    }
-    else {
-      JANUS_LOG(LOG_ERR, "  -- unable to open public key file: %s\n",
-          public_key_filename);
-    }
-  }
+		JANUS_LOG(LOG_INFO, "  -- encrypting recordings with public key: %s\n",
+				public_key_filename);
+		FILE *pubkey_file = fopen(public_key_filename, "r");
+		if (pubkey_file) {
+			rec_pubkey = PEM_read_PUBKEY(pubkey_file, NULL, 0, NULL);
+			if (rec_pubkey) {
+				JANUS_LOG(LOG_INFO, "  -- public key file read successfully\n");
+			}
+			else {
+				JANUS_LOG(LOG_ERR, "  -- error reading public key file: %s\n",
+						public_key_filename);
+			}
+		}
+		else {
+			JANUS_LOG(LOG_ERR, "  -- unable to open public key file: %s\n",
+					public_key_filename);
+		}
+	}
 }
 
 void janus_recorder_deinit(void) {
@@ -103,6 +114,10 @@ static void janus_recorder_free(const janus_refcount *recorder_ref) {
 	g_free(recorder->codec);
 	recorder->codec = NULL;
 	g_free(recorder);
+	if (recorder->evp_ctx) {
+		EVP_CIPHER_CTX_free(recorder->evp_ctx);
+		recorder->evp_ctx = NULL;
+	}
 }
 
 janus_recorder *janus_recorder_create(const char *dir, const char *codec, const char *filename) {
@@ -190,10 +205,12 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 		/* Choose a random username */
 		if(!rec_tempname) {
 			/* Use .mjr as an extension right away */
-			g_snprintf(newname, 1024, "janus-recording-%"SCNu32".mjr", janus_random_uint32());
+			g_snprintf(newname, 1024, "janus-recording-%"SCNu32".mjr",
+					janus_random_uint32());
 		} else {
 			/* Append the temporary extension to .mjr, we'll rename when closing */
-			g_snprintf(newname, 1024, "janus-recording-%"SCNu32".mjr.%s", janus_random_uint32(), rec_tempext);
+			g_snprintf(newname, 1024, "janus-recording-%"SCNu32".mjr.%s",
+					janus_random_uint32(), rec_tempext);
 		}
 	} else {
 		/* Just append the extension */
@@ -204,6 +221,30 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 			/* Append the temporary extension to .mjr, we'll rename when closing */
 			g_snprintf(newname, 1024, "%s.mjr.%s", rec_file, rec_tempext);
 		}
+	}
+	if (rec_pubkey) {
+		strncat(newname, ".enc", sizeof(newname));
+		rc->evp_ctx = EVP_CIPHER_CTX_new();
+		if (!rc->evp_ctx) {
+			JANUS_LOG(LOG_ERR, "error creating libcrypto context");
+		} else {
+			unsigned char iv[16] = {0};
+			int len_iv = EVP_CIPHER_iv_length(EVP_aes_256_cbc());
+			JANUS_LOG(LOG_INFO, "len_iv = %d\n", len_iv);
+			int len_ek = EVP_PKEY_size(rec_pubkey);
+			unsigned char encrypted_key[256] = {0};
+			JANUS_LOG(LOG_INFO, "len_ek = %d\n", len_ek);
+			int actual_encrypted_key_len = 0;
+			int evp_init_rc = EVP_SealInit(rc->evp_ctx, EVP_aes_256_cbc(),
+					&encrypted_key, &actual_encrypted_key_len,
+					iv, &rec_pubkey, 1);
+			JANUS_LOG(LOG_INFO, "EVP_SealInit rc = %d\n", evp_init_rc);
+			if (evp_init_rc != 1) {
+				JANUS_ERR(LOG_ERR, "OH NO EVP_SealInit rc = %d\n", evp_init_rc);
+			}
+		}
+	} else {
+		rc->evp_ctx = NULL;
 	}
 	/* Try opening the file now */
 	if(rec_dir == NULL) {

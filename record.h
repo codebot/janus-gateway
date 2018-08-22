@@ -23,6 +23,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <openssl/evp.h>
 
 #include "mutex.h"
 #include "refcount.h"
@@ -59,6 +60,7 @@ typedef struct janus_recorder {
 	volatile gint destroyed;
 	/*! \brief Reference counter for this instance */
 	janus_refcount ref;
+	EVP_CIPHER_CTX *evp_ctx;
 } janus_recorder;
 
 /*! \brief Initialize the recorder code
