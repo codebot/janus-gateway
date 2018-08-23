@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <libgen.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 
@@ -46,19 +47,67 @@ static char *rec_tempext = NULL;
 /* Public key used to encrypt the recordings */
 static EVP_PKEY *rec_pubkey = NULL;
 
-gboolean janus_recorder_write(
+static gboolean janus_recorder_write(
 		janus_recorder *recorder,
-		void *ptr, size_t nbytes) {
+		const void * const buffer, const size_t nbytes);
+
+/********************************************************************/
+
+static gboolean janus_recorder_write(
+		janus_recorder *recorder, const void * const buffer,
+		const size_t nbytes) {
+	const unsigned char * const cptr = (const unsigned char * const)buffer;
 	if (!rec_pubkey) {
-		if (fwrite(ptr, 1, nbytes, recorder->file) == nbytes)
-			return TRUE;
-		else
-			return FALSE;
+		int bytes_remaining = nbytes;
+		while(bytes_remaining > 0) {
+			const int rc = fwrite(cptr+nbytes-bytes_remaining, 1,
+					bytes_remaining, recorder->file);
+			if(rc <= 0) {
+				JANUS_LOG(LOG_ERR, "fwrite error in janus_recorder_write!\n");
+				/* todo: better error message */
+				return FALSE;
+			}
+			bytes_remaining -= rc;
+		}
+    return TRUE;
+		//if (fwrite(ptr, 1, nbytes, recorder->file) != nbytes) {
+			/* todo: print error message to log */
+		//	return FALSE;
+		//}
 	} else {
-		if (1 == EVP_SealUpdate(recorder->evp_ctx,
+		const size_t BLOCK_LEN = 16;
+		/* worst case, we are one byte beyond a block boundary... */
+		const size_t required_ciphertext_buffer_len =
+				((nbytes + BLOCK_LEN - 1) / BLOCK_LEN) * BLOCK_LEN;
+		/* if needed, allocate a larger buffer */
+		if (required_ciphertext_buffer_len > recorder->ciphertext_buffer_len) {
+			JANUS_LOG(LOG_INFO, "Growing ciphertext buffer from %d to %d\n",
+					(int)recorder->ciphertext_buffer_len,
+					(int)required_ciphertext_buffer_len);
+			if (recorder->ciphertext_buffer) {
+				g_free(recorder->ciphertext_buffer);
+			}
+			recorder->ciphertext_buffer = g_malloc0(required_ciphertext_buffer_len);
+			recorder->ciphertext_buffer_len = required_ciphertext_buffer_len;
+		}
+		int evp_outlen = 0;
+		if (1 != EVP_SealUpdate(recorder->evp_ctx, recorder->ciphertext_buffer,
+					&evp_outlen, cptr, nbytes)) {
+			JANUS_LOG(LOG_ERR, "Error enciphering data: %s\n",
+					ERR_error_string(ERR_get_error(), NULL));
+			return FALSE;
+		}
+		int nwritten = fwrite(recorder->ciphertext_buffer, 1, evp_outlen,
+				recorder->file);
+		if (nwritten < 0) {
+			JANUS_LOG(LOG_ERR, "error writing janus log :(\n");
+			return FALSE;
+		}
 	}
 	return TRUE;
 }
+
+/********************************************************************/
 
 void janus_recorder_init(
     gboolean tempnames,
@@ -85,8 +134,8 @@ void janus_recorder_init(
 				JANUS_LOG(LOG_INFO, "  -- public key file read successfully\n");
 			}
 			else {
-				JANUS_LOG(LOG_ERR, "  -- error reading public key file: %s\n",
-						public_key_filename);
+				JANUS_LOG(LOG_ERR, "  -- error reading public key file %s: %s\n",
+						public_key_filename, ERR_error_string(ERR_get_error(), NULL));
 			}
 		}
 		else {
@@ -117,6 +166,10 @@ static void janus_recorder_free(const janus_refcount *recorder_ref) {
 	if (recorder->evp_ctx) {
 		EVP_CIPHER_CTX_free(recorder->evp_ctx);
 		recorder->evp_ctx = NULL;
+	}
+	if (recorder->ciphertext_buffer) {
+		g_free(recorder->ciphertext_buffer);
+		recorder->ciphertext_buffer_len = 0;
 	}
 }
 
@@ -222,29 +275,17 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 			g_snprintf(newname, 1024, "%s.mjr.%s", rec_file, rec_tempext);
 		}
 	}
+	rc->ciphertext_buffer = NULL;
+	rc->ciphertext_buffer_len = 0;
+	rc->evp_ctx = NULL;
 	if (rec_pubkey) {
 		strncat(newname, ".enc", sizeof(newname));
 		rc->evp_ctx = EVP_CIPHER_CTX_new();
 		if (!rc->evp_ctx) {
-			JANUS_LOG(LOG_ERR, "error creating libcrypto context");
-		} else {
-			unsigned char iv[16] = {0};
-			int len_iv = EVP_CIPHER_iv_length(EVP_aes_256_cbc());
-			JANUS_LOG(LOG_INFO, "len_iv = %d\n", len_iv);
-			int len_ek = EVP_PKEY_size(rec_pubkey);
-			unsigned char encrypted_key[256] = {0};
-			JANUS_LOG(LOG_INFO, "len_ek = %d\n", len_ek);
-			int actual_encrypted_key_len = 0;
-			int evp_init_rc = EVP_SealInit(rc->evp_ctx, EVP_aes_256_cbc(),
-					&encrypted_key, &actual_encrypted_key_len,
-					iv, &rec_pubkey, 1);
-			JANUS_LOG(LOG_INFO, "EVP_SealInit rc = %d\n", evp_init_rc);
-			if (evp_init_rc != 1) {
-				JANUS_ERR(LOG_ERR, "OH NO EVP_SealInit rc = %d\n", evp_init_rc);
-			}
+			JANUS_LOG(LOG_ERR, "error creating libcrypto context: %s\n",
+					ERR_error_string(ERR_get_error(), NULL));
+			return NULL;
 		}
-	} else {
-		rc->evp_ctx = NULL;
 	}
 	/* Try opening the file now */
 	if(rec_dir == NULL) {
@@ -263,8 +304,37 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 		rc->dir = g_strdup(rec_dir);
 	rc->filename = g_strdup(newname);
 	rc->type = type;
+  /* if we're encrypting, write the encrypted key and IV first */
+	if (rc->evp_ctx) {
+		unsigned char iv[16] = {0};
+		int len_iv = EVP_CIPHER_iv_length(EVP_aes_256_cbc());
+		JANUS_LOG(LOG_INFO, "len_iv = %d\n", len_iv);
+		int len_ek = EVP_PKEY_size(rec_pubkey);
+		unsigned char encrypted_key[256] = {0};
+		unsigned char *encrypted_keys[1] = { &encrypted_key[0] };
+		JANUS_LOG(LOG_INFO, "len_ek = %d\n", len_ek);
+		int actual_encrypted_key_len = 0;
+		int evp_init_rc = EVP_SealInit(rc->evp_ctx, EVP_aes_256_cbc(),
+				encrypted_keys, &actual_encrypted_key_len,
+				iv, &rec_pubkey, 1);
+		JANUS_LOG(LOG_INFO, "EVP_SealInit rc = %d\n", evp_init_rc);
+		if (evp_init_rc != 1) {
+			JANUS_LOG(LOG_ERR, "OH NO EVP_SealInit rc = %d: %s\n",
+					evp_init_rc, ERR_error_string(ERR_get_error(), NULL));
+			return NULL;
+		}
+		if (256 != fwrite(encrypted_key, 1, 256, rc->file)) {
+			JANUS_LOG(LOG_ERR, "unable to write encrypted AES key to log file\n");
+			return NULL;
+		}
+		if (16 != fwrite(iv, 1, 16, rc->file)) {
+			JANUS_LOG(LOG_ERR, "unable to write AES IV to log file\n");
+			return NULL;
+		}
+  }
 	/* Write the first part of the header */
-	fwrite(header, sizeof(char), strlen(header), rc->file);
+	janus_recorder_write(rc, header, sizeof(header));
+	//fwrite(header, sizeof(char), strlen(header), rc->file);
 	g_atomic_int_set(&rc->writable, 1);
 	/* We still need to also write the info header first */
 	g_atomic_int_set(&rc->header, 0);
@@ -311,22 +381,29 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		gchar *info_text = json_dumps(info, JSON_PRESERVE_ORDER);
 		json_decref(info);
 		uint16_t info_bytes = htons(strlen(info_text));
-		fwrite(&info_bytes, sizeof(uint16_t), 1, recorder->file);
-		fwrite(info_text, sizeof(char), strlen(info_text), recorder->file);
+		janus_recorder_write(recorder, &info_bytes, sizeof(uint16_t));
+		//fwrite(&info_bytes, sizeof(uint16_t), 1, recorder->file);
+		janus_recorder_write(recorder, info_text, strlen(info_text));
+		//fwrite(info_text, sizeof(char), strlen(info_text), recorder->file);
 		free(info_text);
 		/* Done */
 		g_atomic_int_set(&recorder->header, 1);
 	}
 	/* Write frame header */
-	fwrite(frame_header, sizeof(char), strlen(frame_header), recorder->file);
+	janus_recorder_write(recorder, frame_header, strlen(frame_header));
+	//fwrite(frame_header, sizeof(char), strlen(frame_header), recorder->file);
 	uint16_t header_bytes = htons(recorder->type == JANUS_RECORDER_DATA ? (length+sizeof(gint64)) : length);
-	fwrite(&header_bytes, sizeof(uint16_t), 1, recorder->file);
+	//fwrite(&header_bytes, sizeof(uint16_t), 1, recorder->file);
+	janus_recorder_write(recorder, &header_bytes, sizeof(uint16_t));
 	if(recorder->type == JANUS_RECORDER_DATA) {
 		/* If it's data, then we need to prepend timing related info, as it's not there by itself */
 		gint64 now = htonll(janus_get_real_time());
-		fwrite(&now, sizeof(gint64), 1, recorder->file);
+		janus_recorder_write(recorder, &now, sizeof(gint64));
+		//fwrite(&now, sizeof(gint64), 1, recorder->file);
 	}
 	/* Save packet on file */
+	janus_recorder_write(recorder, buffer, length);
+	/*
 	int temp = 0, tot = length;
 	while(tot > 0) {
 		temp = fwrite(buffer+length-tot, sizeof(char), tot, recorder->file);
@@ -337,6 +414,7 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		}
 		tot -= temp;
 	}
+	*/
 	/* Done */
 	janus_mutex_unlock_nodebug(&recorder->mutex);
 	return 0;
@@ -347,6 +425,14 @@ int janus_recorder_close(janus_recorder *recorder) {
 		return -1;
 	janus_mutex_lock_nodebug(&recorder->mutex);
 	if(recorder->file) {
+		if (rec_pubkey) {
+			unsigned char final_buf[16] = {0};
+			int nwritten = 0;
+			int rc = EVP_EncryptFinal(recorder->evp_ctx, final_buf, &nwritten);
+			JANUS_LOG(LOG_INFO, "EVP_EncryptFinal rc = %d nwritten = %d\n",
+					rc, nwritten);
+			fwrite(final_buf, 1, nwritten, recorder->file);
+		}
 		fseek(recorder->file, 0L, SEEK_END);
 		size_t fsize = ftell(recorder->file);
 		fseek(recorder->file, 0L, SEEK_SET);

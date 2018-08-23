@@ -61,6 +61,8 @@ typedef struct janus_recorder {
 	/*! \brief Reference counter for this instance */
 	janus_refcount ref;
 	EVP_CIPHER_CTX *evp_ctx;
+	unsigned char *ciphertext_buffer;
+	size_t ciphertext_buffer_len;
 } janus_recorder;
 
 /*! \brief Initialize the recorder code
