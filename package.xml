@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>Janus</name>
+  <name>janus</name>
   <version>0.0.0</version>
   <description>Janus is an open source, general purpose WebRTC server designed and developed by Meetecho. This fork of Janus adds a ROS 2 transport plugin and the ability to encrypt recordings.</description>
   <maintainer email="mquigley@openrobotics.org">Morgan Quigley</maintainer>
