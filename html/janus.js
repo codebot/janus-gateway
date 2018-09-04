@@ -26,6 +26,10 @@
 Janus.sessions = {};
 
 Janus.isExtensionEnabled = function() {
+	if(navigator.getDisplayMedia) {
+		// No need for the extension, getDisplayMedia is supported
+		return true;
+	}
 	if(window.navigator.userAgent.match('Chrome')) {
 		var chromever = parseInt(window.navigator.userAgent.match(/Chrome\/(.*) /)[1], 10);
 		var maxver = 33;
@@ -467,9 +471,9 @@ function Janus(gatewayCallbacks) {
 		if(maxev !== undefined && maxev !== null)
 			longpoll = longpoll + "&maxev=" + maxev;
 		if(token !== null && token !== undefined)
-			longpoll = longpoll + "&token=" + token;
+			longpoll = longpoll + "&token=" + encodeURIComponent(token);
 		if(apisecret !== null && apisecret !== undefined)
-			longpoll = longpoll + "&apisecret=" + apisecret;
+			longpoll = longpoll + "&apisecret=" + encodeURIComponent(apisecret);
 		Janus.httpAPICall(longpoll, {
 			verb: 'GET',
 			withCredentials: withCredentials,
@@ -555,7 +559,7 @@ function Janus(gatewayCallbacks) {
 					config.pc.addIceCandidate();
 				} else {
 					// New candidate
-					config.pc.addIceCandidate(new RTCIceCandidate(candidate));
+					config.pc.addIceCandidate(candidate);
 				}
 			} else {
 				// We didn't do setRemoteDescription (trickle got here before the offer?)
@@ -751,7 +755,7 @@ function Janus(gatewayCallbacks) {
 			wsHandlers = {
 				'error': function() {
 					Janus.error("Error connecting to the Janus WebSockets server... " + server);
-					if (Janus.isArray(servers)) {
+					if (Janus.isArray(servers) && !callbacks["reconnect"]) {
 						serversIndex++;
 						if (serversIndex == servers.length) {
 							// We tried all the servers the user gave us and they all failed
@@ -835,7 +839,7 @@ function Janus(gatewayCallbacks) {
 			},
 			error: function(textStatus, errorThrown) {
 				Janus.error(textStatus + ":", errorThrown);	// FIXME
-				if(Janus.isArray(servers)) {
+				if(Janus.isArray(servers) && !callbacks["reconnect"]) {
 					serversIndex++;
 					if(serversIndex == servers.length) {
 						// We tried all the servers the user gave us and they all failed
@@ -1664,29 +1668,28 @@ function Janus(gatewayCallbacks) {
 		if(jsep === null || jsep === undefined) {
 			createOffer(handleId, media, callbacks);
 		} else {
-			config.pc.setRemoteDescription(
-					new RTCSessionDescription(jsep),
-					function() {
-						Janus.log("Remote description accepted!");
-						config.remoteSdp = jsep.sdp;
-						// Any trickle candidate we cached?
-						if(config.candidates && config.candidates.length > 0) {
-							for(var i in config.candidates) {
-								var candidate = config.candidates[i];
-								Janus.debug("Adding remote candidate:", candidate);
-								if(!candidate || candidate.completed === true) {
-									// end-of-candidates
-									config.pc.addIceCandidate();
-								} else {
-									// New candidate
-									config.pc.addIceCandidate(new RTCIceCandidate(candidate));
-								}
+			config.pc.setRemoteDescription(jsep)
+				.then(function() {
+					Janus.log("Remote description accepted!");
+					config.remoteSdp = jsep.sdp;
+					// Any trickle candidate we cached?
+					if(config.candidates && config.candidates.length > 0) {
+						for(var i in config.candidates) {
+							var candidate = config.candidates[i];
+							Janus.debug("Adding remote candidate:", candidate);
+							if(!candidate || candidate.completed === true) {
+								// end-of-candidates
+								config.pc.addIceCandidate();
+							} else {
+								// New candidate
+								config.pc.addIceCandidate(candidate);
 							}
-							config.candidates = [];
 						}
-						// Create the answer now
-						createAnswer(handleId, media, callbacks);
-					}, callbacks.error);
+						config.candidates = [];
+					}
+					// Create the answer now
+					createAnswer(handleId, media, callbacks);
+				}, callbacks.error);
 		}
 	}
 
@@ -1966,12 +1969,26 @@ function Janus(gatewayCallbacks) {
 					if(!media.screenshareFrameRate) {
 						media.screenshareFrameRate = 3;
 					}
-					// Not a webcam, but screen capture
-					if(window.location.protocol !== 'https:') {
-						// Screen sharing mandates HTTPS
-						Janus.warn("Screen sharing only works on HTTPS, try the https:// version of this page");
-						pluginHandle.consentDialog(false);
-						callbacks.error("Screen sharing only works on HTTPS, try the https:// version of this page");
+					if(navigator.getDisplayMedia) {
+						// The new experimental getDisplayMedia API is available, let's use that
+						// https://groups.google.com/forum/#!topic/discuss-webrtc/Uf0SrR4uxzk
+						// https://webrtchacks.com/chrome-screensharing-getdisplaymedia/
+						navigator.getDisplayMedia({ video: true })
+							.then(stream => {
+								pluginHandle.consentDialog(false);
+								if(isAudioSendEnabled(media)){
+									navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+									.then(function (audioStream) {
+										stream.addTrack(audioStream.getAudioTracks()[0]);
+										streamsDone(handleId, jsep, media, callbacks, stream);
+									})
+								} else {
+									streamsDone(handleId, jsep, media, callbacks, stream);
+								}
+							}, error => {
+								pluginHandle.consentDialog(false);
+								callbacks.error(error);
+							});
 						return;
 					}
 					// We're going to try and use the extension for Chrome 34+, the old approach
@@ -2164,29 +2181,28 @@ function Janus(gatewayCallbacks) {
 				callbacks.error("No PeerConnection: if this is an answer, use createAnswer and not handleRemoteJsep");
 				return;
 			}
-			config.pc.setRemoteDescription(
-					new RTCSessionDescription(jsep),
-					function() {
-						Janus.log("Remote description accepted!");
-						config.remoteSdp = jsep.sdp;
-						// Any trickle candidate we cached?
-						if(config.candidates && config.candidates.length > 0) {
-							for(var i in config.candidates) {
-								var candidate = config.candidates[i];
-								Janus.debug("Adding remote candidate:", candidate);
-								if(!candidate || candidate.completed === true) {
-									// end-of-candidates
-									config.pc.addIceCandidate();
-								} else {
-									// New candidate
-									config.pc.addIceCandidate(new RTCIceCandidate(candidate));
-								}
+			config.pc.setRemoteDescription(jsep)
+				.then(function() {
+					Janus.log("Remote description accepted!");
+					config.remoteSdp = jsep.sdp;
+					// Any trickle candidate we cached?
+					if(config.candidates && config.candidates.length > 0) {
+						for(var i in config.candidates) {
+							var candidate = config.candidates[i];
+							Janus.debug("Adding remote candidate:", candidate);
+							if(!candidate || candidate.completed === true) {
+								// end-of-candidates
+								config.pc.addIceCandidate();
+							} else {
+								// New candidate
+								config.pc.addIceCandidate(candidate);
 							}
-							config.candidates = [];
 						}
-						// Done
-						callbacks.success();
-					}, callbacks.error);
+						config.candidates = [];
+					}
+					// Done
+					callbacks.success();
+				}, callbacks.error);
 		} else {
 			callbacks.error("Invalid JSEP");
 		}
@@ -2321,8 +2337,8 @@ function Janus(gatewayCallbacks) {
 				{ rid: "low", active: true, priority: "low", maxBitrate: 100000 }
 			]});
 		}
-		config.pc.createOffer(
-			function(offer) {
+		config.pc.createOffer(mediaConstraints)
+			.then(function(offer) {
 				Janus.debug(offer);
 				Janus.log("Setting local description");
 				if(sendVideo && simulcast) {
@@ -2335,7 +2351,8 @@ function Janus(gatewayCallbacks) {
 					}
 				}
 				config.mySdp = offer.sdp;
-				config.pc.setLocalDescription(offer);
+				config.pc.setLocalDescription(offer)
+					.catch(callbacks.error);
 				config.mediaConstraints = mediaConstraints;
 				if(!config.iceDone && !config.trickle) {
 					// Don't do anything until we have all candidates
@@ -2351,7 +2368,7 @@ function Janus(gatewayCallbacks) {
 					"sdp": offer.sdp
 				};
 				callbacks.success(jsep);
-			}, callbacks.error, mediaConstraints);
+			}, callbacks.error);
 	}
 
 	function createAnswer(handleId, media, callbacks) {
@@ -2490,8 +2507,8 @@ function Janus(gatewayCallbacks) {
 				{ rid: "low", active: true, priority: "low", maxBitrate: 100000 }
 			]});
 		}
-		config.pc.createAnswer(
-			function(answer) {
+		config.pc.createAnswer(mediaConstraints)
+			.then(function(answer) {
 				Janus.debug(answer);
 				Janus.log("Setting local description");
 				if(sendVideo && simulcast) {
@@ -2506,7 +2523,8 @@ function Janus(gatewayCallbacks) {
 					}
 				}
 				config.mySdp = answer.sdp;
-				config.pc.setLocalDescription(answer);
+				config.pc.setLocalDescription(answer)
+					.catch(callbacks.error);
 				config.mediaConstraints = mediaConstraints;
 				if(!config.iceDone && !config.trickle) {
 					// Don't do anything until we have all candidates
@@ -2520,7 +2538,7 @@ function Janus(gatewayCallbacks) {
 					"sdp": answer.sdp
 				};
 				callbacks.success(jsep);
-			}, callbacks.error, mediaConstraints);
+			}, callbacks.error);
 	}
 
 	function sendSDP(handleId, callbacks) {
