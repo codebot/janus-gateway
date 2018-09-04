@@ -3407,6 +3407,9 @@ gint main(int argc, char *argv[])
 	if(args_info.plugins_folder_given) {
 		janus_config_add_item(config, "general", "plugins_folder", args_info.plugins_folder_arg);
 	}
+  if(args_info.transports_folder_given) {
+		janus_config_add_item(config, "general", "transports_folder", args_info.transports_folder_arg);
+	}
 	if(args_info.apisecret_given) {
 		janus_config_add_item(config, "general", "api_secret", args_info.apisecret_arg);
 	}
