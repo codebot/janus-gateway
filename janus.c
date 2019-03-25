@@ -3559,7 +3559,7 @@ gint main(int argc, char *argv[])
 		janus_config_add(config, config_general, janus_config_item_create("plugins_folder", args_info.plugins_folder_arg));
 	}
   if(args_info.transports_folder_given) {
-		janus_config_add(config, config_general, janus_config_item_create("transports_folder", args_info.transports_folder_arg);
+		janus_config_add(config, config_general, janus_config_item_create("transports_folder", args_info.transports_folder_arg));
 	}
 	if(args_info.apisecret_given) {
 		janus_config_add(config, config_general, janus_config_item_create("api_secret", args_info.apisecret_arg));
