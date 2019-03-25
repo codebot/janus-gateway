@@ -3559,7 +3559,7 @@ gint main(int argc, char *argv[])
 		janus_config_add(config, config_general, janus_config_item_create("plugins_folder", args_info.plugins_folder_arg));
 	}
   if(args_info.transports_folder_given) {
-		janus_config_add_item(config, "general", "transports_folder", args_info.transports_folder_arg);
+		janus_config_add(config, config_general, janus_config_item_create("transports_folder", args_info.transports_folder_arg);
 	}
 	if(args_info.apisecret_given) {
 		janus_config_add(config, config_general, janus_config_item_create("api_secret", args_info.apisecret_arg));
@@ -3580,7 +3580,7 @@ gint main(int argc, char *argv[])
 		janus_config_add(config, config_certs, janus_config_item_create("cert_pwd", args_info.cert_pwd_arg));
 	}
   if(args_info.rec_pubkey_given) {
-    janus_config_add_item(config, "general", "recordings_public_key", args_info.rec_pubkey_arg);
+    janus_config_add(config, config_general, janus_config_item_create("recordings_public_key", args_info.rec_pubkey_arg));
   }
 	if(args_info.stun_server_given) {
 		/* Split in server and port (if port missing, use 3478 as default) */
